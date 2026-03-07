@@ -1,0 +1,25 @@
+relay(id=relay-3, coil=0.0, vcc=0.0, norm_open=0.0, norm_closed=0.0, coil_threshold=2.0);
+relay(id=relay-4, coil=0.0, vcc=5.0, norm_open=0.0, norm_closed=0.0, coil_threshold=2.0);
+
+bitloader(id=bitloader-1, speed=1, input=10110011, buffer=, phase=0, vcc=5.0, out_voltage=0.0);
+
+momentary_switch(id=momentary-switch-1, vcc=5.0, pressed=False, out_voltage=0.0, norm_open=0.0, norm_closed=5.0);
+latching_switch(id=latching-switch-1, vcc=5.0, latched=True, out_voltage=5.0, norm_open=5.0, norm_closed=0.0);
+
+diode(id=diode-1, voltage=0.0, out_voltage=0.0, forward_threshold=0.7);
+capacitor(id=capacitor-1, voltage=0.0, in_voltage=0.0, max_voltage=5.0, charge_rate=1.0, discharge_rate=0.25);
+
+light(id=light-1, voltage=0.0, on=False, threshold=2.0);
+light(id=light-2, voltage=0.0, on=False, threshold=2.0);
+light(id=light-3, voltage=0.0, on=False, threshold=2.0);
+light(id=light-4, voltage=0.0, on=False, threshold=2.0);
+
+wire(id=wire-1, voltage=0.0, source_id=momentary-switch-1, source_attr=out_v, target_id=relay-3, target_attr=coil, drop=0.0);
+wire(id=wire-2, voltage=0.0, source_id=latching-switch-1, source_attr=out_v, target_id=relay-3, target_attr=vcc, drop=0.0);
+wire(id=wire-3, voltage=0.0, source_id=relay-3, source_attr=norm_open, target_id=diode-1, target_attr=v, drop=0.0);
+wire(id=wire-4, voltage=0.0, source_id=diode-1, source_attr=out_v, target_id=capacitor-1, target_attr=in_v, drop=0.0);
+wire(id=wire-5, voltage=0.0, source_id=capacitor-1, source_attr=v, target_id=relay-4, target_attr=coil, drop=0.0);
+wire(id=wire-6, voltage=0.0, source_id=relay-4, source_attr=norm_open, target_id=light-1, target_attr=v, drop=0.0);
+wire(id=wire-7, voltage=0.0, source_id=relay-4, source_attr=norm_closed, target_id=light-2, target_attr=v, drop=0.0);
+wire(id=wire-8, voltage=0.0, source_id=momentary-switch-1, source_attr=out_v, target_id=light-3, target_attr=v, drop=0.0);
+wire(id=wire-9, voltage=0.0, source_id=bitloader-1, source_attr=out_v, target_id=light-4, target_attr=v, drop=0.0);
