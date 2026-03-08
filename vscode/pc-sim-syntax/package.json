@@ -1,0 +1,36 @@
+{
+  "name": "pc-sim-syntax",
+  "displayName": "PC Sim Syntax",
+  "description": "Syntax highlighting support for PC simulator .sim files",
+  "version": "0.0.1",
+  "publisher": "deltathedumb",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "pcsim",
+        "aliases": [
+          "PC Sim",
+          "pcsim"
+        ],
+        "extensions": [
+          ".sim"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "pcsim",
+        "scopeName": "source.pcsim",
+        "path": "./syntaxes/sim.tmLanguage.json"
+      }
+    ]
+  }
+}

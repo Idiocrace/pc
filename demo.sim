@@ -1,0 +1,43 @@
+# Demo circuit
+@meta(name=Demo Circuit, version=1.0);
+# Future implementation to allow for slick importing of custom components
+#@using(name=base, version=1.0);
+
+# Relays
+relay(id=relay-1, coil=0.0, vcc=0.0, norm_open=0.0, norm_closed=0.0, coil_threshold=2.0);
+relay(id=relay-2, coil=0.0, vcc=5.0, norm_open=0.0, norm_closed=5.0, coil_threshold=2.0);
+bitloader(id=bitloader-1, speed=1, input=, _buffer=10110011, _step=0, vcc=5.0, out_v=0.0);
+
+# Switches
+momentary_switch(id=momentary-switch-1, vcc=5.0, pressed=False, out_v=0.0, norm_open=0.0, norm_closed=5.0);
+latching_switch(id=latching-switch-1, vcc=5.0, latched=True, out_v=5.0, norm_open=5.0, norm_closed=0.0);
+
+# Diodes
+diode(id=diode-1, vcc=0.0, out_v=0.0, forward_threshold=0.7, backward_threshold=5, drain_rate=1.0);
+
+# Capacitors
+capacitor(id=capacitor-1, v=0.0, vcc=0.0, max_v=5.0, charge_rate=1.0, discharge_rate=0.25);
+
+# Lights
+light(id=light-1, vcc=0.0, on=False, on_threshold=2.0);
+light(id=light-2, vcc=0.0, on=False, on_threshold=2.0);
+light(id=light-3, vcc=0.0, on=False, on_threshold=2.0);
+light(id=light-4, vcc=0.0, on=False, on_threshold=2.0);
+
+# Supplies and Grounds
+ground(id=ground-1, vcc=0.0);
+
+# Wires
+wire(id=wire-1, v=0.0, source_id=momentary-switch-1, source_attr=out_v, target_id=relay-1, target_attr=coil, drop=0.0);
+wire(id=wire-2, v=0.0, source_id=latching-switch-1, source_attr=out_v, target_id=relay-1, target_attr=vcc, drop=0.0);
+wire(id=wire-3, v=0.0, source_id=relay-1, source_attr=norm_open, target_id=diode-1, target_attr=vcc, drop=0.0);
+wire(id=wire-4, v=0.0, source_id=diode-1, source_attr=out_v, target_id=capacitor-1, target_attr=vcc, drop=0.0);
+wire(id=wire-5, v=0.0, source_id=capacitor-1, source_attr=v, target_id=relay-2, target_attr=coil, drop=0.0);
+wire(id=wire-6, v=0.0, source_id=relay-2, source_attr=norm_open, target_id=light-1, target_attr=vcc, drop=0.0);
+wire(id=wire-7, v=0.0, source_id=relay-2, source_attr=norm_closed, target_id=light-2, target_attr=vcc, drop=0.0);
+wire(id=wire-8, v=0.0, source_id=momentary-switch-1, source_attr=out_v, target_id=light-3, target_attr=vcc, drop=0.0);
+wire(id=wire-9, v=0.0, source_id=bitloader-1, source_attr=out_v, target_id=light-4, target_attr=vcc, drop=0.0);
+wire(id=wire-10, v=0.0, source_id=light-1, source_attr=vcc, target_id=ground-1, target_attr=vcc, drop=0.0);
+wire(id=wire-11, v=0.0, source_id=light-2, source_attr=vcc, target_id=ground-1, target_attr=vcc, drop=0.0);
+wire(id=wire-12, v=0.0, source_id=light-3, source_attr=vcc, target_id=ground-1, target_attr=vcc, drop=0.0);
+wire(id=wire-13, v=0.0, source_id=light-4, source_attr=vcc, target_id=ground-1, target_attr=vcc, drop=0.0);

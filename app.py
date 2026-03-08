@@ -1,15 +1,16 @@
 ﻿from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import shlex
 import sys
 import time
 from pathlib import Path
-
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog
 
-from simulator import Bitloader, LatchingSwitch, MomentarySwitch, PC1, Relay
+from simulator import Bitloader, LatchingSwitch, MomentarySwitch, Relay, Sim, Wire
 
 
 def _to_value(raw: str):
@@ -27,29 +28,48 @@ def _to_value(raw: str):
 
 class SimulatorCLI:
     def __init__(self) -> None:
-        self.pc = PC1()
+        self.sim = Sim(version="1.0")
         self.loaded_file: Path | None = None
-        self.tick = 0
+
+    def _get_components_by_type(self, comp_type):
+        """Get all components of a specific type"""
+        return [
+            comp
+            for comp in self.sim.components.values()
+            if type(comp).__name__.lower() == comp_type.replace("_", "").lower()
+        ]
 
     def load(self, filename: str) -> None:
         path = Path(filename)
         if not path.exists():
             raise FileNotFoundError(f"File not found: {filename}")
 
-        self.pc.load(str(path))
+        self.sim.load_sim_state(str(path))
         self.loaded_file = path
-        self.tick = 0
-        print(f"Loaded {path}.")
+        print(f"Loaded {path} (name: {self.sim.name})")
+
+        # Count components by type
+        bitloaders = self._get_components_by_type("bitloader")
+        relays = self._get_components_by_type("relay")
+        diodes = self._get_components_by_type("diode")
+        capacitors = self._get_components_by_type("capacitor")
+        lights = self._get_components_by_type("light")
+        momentary_switches = self._get_components_by_type("momentary_switch")
+        latching_switches = self._get_components_by_type("latching_switch")
+        wires = [
+            comp for comp in self.sim.components.values() if isinstance(comp, Wire)
+        ]
+
         print(
             "Parts: "
-            f"{len(self.pc.state.bitloaders)} bitloaders, "
-            f"{len(self.pc.state.relays)} relays, "
-            f"{len(self.pc.state.diodes)} diodes, "
-            f"{len(self.pc.state.capacitors)} capacitors, "
-            f"{len(self.pc.state.lights)} lights, "
-            f"{len(self.pc.state.momentary_switches)} momentary switches, "
-            f"{len(self.pc.state.latching_switches)} latching switches, "
-            f"{len(self.pc.state.wires)} wires"
+            f"{len(bitloaders)} bitloaders, "
+            f"{len(relays)} relays, "
+            f"{len(diodes)} diodes, "
+            f"{len(capacitors)} capacitors, "
+            f"{len(lights)} lights, "
+            f"{len(momentary_switches)} momentary switches, "
+            f"{len(latching_switches)} latching switches, "
+            f"{len(wires)} wires"
         )
 
     def save(self, filename: str | None = None) -> None:
@@ -60,7 +80,7 @@ class SimulatorCLI:
         else:
             raise ValueError("No target file specified.")
 
-        self.pc.save(str(out))
+        self.sim.save_sim_state(str(out))
         print(f"Saved {out}.")
 
     def step(self, count: int = 1, verbose: bool = True) -> None:
@@ -68,11 +88,10 @@ class SimulatorCLI:
             raise ValueError("Step count must be >= 1")
 
         for _ in range(count):
-            self.pc.state.process()
-            self.tick += 1
+            self.sim.step()
 
         if verbose:
-            print(f"Advanced {count} step(s). Tick={self.tick}")
+            print(f"Advanced {count} step(s). Tick={self.sim.curr_step}")
             self.show_lights()
 
     def run(self, count: int, delay_s: float = 0.0) -> None:
@@ -83,109 +102,123 @@ class SimulatorCLI:
 
         for _ in range(count):
             self.step(1, verbose=False)
-            print(f"Tick={self.tick}", end=" ")
+            print(f"Tick={self.sim.curr_step}", end=" ")
             self.show_lights(prefix="")
             if delay_s:
                 time.sleep(delay_s)
 
     def show_lights(self, prefix: str = "Lights: ") -> None:
-        if not self.pc.state.lights:
+        lights = self._get_components_by_type("light")
+        if not lights:
             print("No lights present.")
             return
 
         states = []
-        for light in self.pc.state.lights:
+        for light in lights:
             states.append(
-                f"{light.part_id}={'ON' if light.on else 'off'}({light.v:.2f}V)"
+                f"{light.part_id}={'ON' if light.on else 'off'}({light.vcc:.2f}V)"
             )
         print(prefix + " ".join(states))
 
     def status(self) -> None:
-        print(f"Tick: {self.tick}")
+        print(f"Tick: {self.sim.curr_step}")
 
-        print("Bitloaders:")
-        for loader in self.pc.state.bitloaders:
-            print(
-                f"  {loader.part_id}: speed={loader.speed} phase={loader._step} "
-                f"queue='{loader._buffer}' out={loader.out_v:.2f}V"
-            )
+        bitloaders = self._get_components_by_type("bitloader")
+        if bitloaders:
+            print("Bitloaders:")
+            for loader in bitloaders:
+                print(
+                    f"  {loader.part_id}: speed={loader.speed} phase={loader._step} "
+                    f"queue='{loader._buffer}' out={loader.out_v:.2f}V"
+                )
 
-        print("Momentary switches:")
-        for switch in self.pc.state.momentary_switches:
-            print(
-                f"  {switch.part_id}: pressed={switch.pressed} "
-                f"out={switch.out_v:.2f}V vcc={switch.vcc:.2f}V"
-            )
+        momentary_switches = self._get_components_by_type("momentary_switch")
+        if momentary_switches:
+            print("Momentary switches:")
+            for switch in momentary_switches:
+                print(
+                    f"  {switch.part_id}: pressed={switch.pressed} "
+                    f"out={switch.out_v:.2f}V vcc={switch.vcc:.2f}V"
+                )
 
-        print("Latching switches:")
-        for switch in self.pc.state.latching_switches:
-            print(
-                f"  {switch.part_id}: latched={switch.latched} "
-                f"out={switch.out_v:.2f}V vcc={switch.vcc:.2f}V"
-            )
+        latching_switches = self._get_components_by_type("latching_switch")
+        if latching_switches:
+            print("Latching switches:")
+            for switch in latching_switches:
+                print(
+                    f"  {switch.part_id}: latched={switch.latched} "
+                    f"out={switch.out_v:.2f}V vcc={switch.vcc:.2f}V"
+                )
 
-        print("Relays:")
-        for relay in self.pc.state.relays:
-            print(
-                f"  {relay.part_id}: coil={relay.coil:.2f}V vcc={relay.vcc:.2f}V "
-                f"NO={relay.norm_open:.2f}V NC={relay.norm_closed:.2f}V"
-            )
+        relays = self._get_components_by_type("relay")
+        if relays:
+            print("Relays:")
+            for relay in relays:
+                print(
+                    f"  {relay.part_id}: coil={relay.coil:.2f}V vcc={relay.vcc:.2f}V "
+                    f"NO={relay.norm_open:.2f}V NC={relay.norm_closed:.2f}V"
+                )
 
-        print("Diodes:")
-        for diode in self.pc.state.diodes:
-            print(
-                f"  {diode.part_id}: in={diode.v:.2f}V out={diode.out_v:.2f}V "
-                f"th={diode.forward_threshold:.2f}V"
-            )
+        diodes = self._get_components_by_type("diode")
+        if diodes:
+            print("Diodes:")
+            for diode in diodes:
+                print(
+                    f"  {diode.part_id}: in={diode.vcc:.2f}V out={diode.out_v:.2f}V "
+                    f"th={diode.forward_threshold:.2f}V"
+                )
 
-        print("Capacitors:")
-        for cap in self.pc.state.capacitors:
-            print(
-                f"  {cap.part_id}: in={cap.in_v:.2f}V v={cap.v:.2f}V "
-                f"max={cap.max_v:.2f}V"
-            )
+        capacitors = self._get_components_by_type("capacitor")
+        if capacitors:
+            print("Capacitors:")
+            for cap in capacitors:
+                print(
+                    f"  {cap.part_id}: in={cap.vcc:.2f}V v={cap.v:.2f}V "
+                    f"max={cap.max_v:.2f}V"
+                )
 
         self.show_lights()
 
     def list_parts(self, kind: str = "all") -> None:
         kinds = {
-            "bitloader": self.pc.state.bitloaders,
-            "relay": self.pc.state.relays,
-            "wire": self.pc.state.wires,
-            "light": self.pc.state.lights,
-            "capacitor": self.pc.state.capacitors,
-            "diode": self.pc.state.diodes,
-            "momentary_switch": self.pc.state.momentary_switches,
-            "latching_switch": self.pc.state.latching_switches,
+            "bitloader": self._get_components_by_type("bitloader"),
+            "relay": self._get_components_by_type("relay"),
+            "wire": [c for c in self.sim.components.values() if isinstance(c, Wire)],
+            "light": self._get_components_by_type("light"),
+            "capacitor": self._get_components_by_type("capacitor"),
+            "diode": self._get_components_by_type("diode"),
+            "momentary_switch": self._get_components_by_type("momentary_switch"),
+            "latching_switch": self._get_components_by_type("latching_switch"),
+            "ground": self._get_components_by_type("ground"),
+            "drain": self._get_components_by_type("drain"),
         }
 
         if kind == "all":
             for key, items in kinds.items():
-                print(f"{key}s: {[p.part_id for p in items]}")
+                if items:
+                    print(f"{key}s: {[p.part_id for p in items]}")
             return
 
         if kind not in kinds:
             raise ValueError(
                 "kind must be one of: all bitloader relay wire light "
-                "capacitor diode momentary_switch latching_switch"
+                "capacitor diode momentary_switch latching_switch ground drain"
             )
 
         print([p.part_id for p in kinds[kind]])
 
     def show_part(self, part_id: str) -> None:
-        part = self.pc.state.get_part(part_id)
+        part = self.sim.components.get(part_id)
         if part is None:
             raise ValueError(f"Unknown part id: {part_id}")
 
         attrs = {
-            key: value
-            for key, value in vars(part).items()
-            if not key.startswith("_")
+            key: value for key, value in vars(part).items() if not key.startswith("_")
         }
         print(f"{part_id}: {attrs}")
 
     def set_attr(self, part_id: str, attr: str, raw_value: str) -> None:
-        part = self.pc.state.get_part(part_id)
+        part = self.sim.components.get(part_id)
         if part is None:
             raise ValueError(f"Unknown part id: {part_id}")
         if not hasattr(part, attr):
@@ -205,7 +238,7 @@ class SimulatorCLI:
         print(f"Set {part_id}.{attr} = {value}")
 
     def set_coil(self, relay_id: str, value: float) -> None:
-        part = self.pc.state.get_part(relay_id)
+        part = self.sim.components.get(relay_id)
         if not isinstance(part, Relay):
             raise ValueError(f"{relay_id} is not a relay")
 
@@ -213,7 +246,7 @@ class SimulatorCLI:
         print(f"Set {relay_id}.coil = {part.coil}")
 
     def pulse(self, relay_id: str, value: float, steps: int) -> None:
-        part = self.pc.state.get_part(relay_id)
+        part = self.sim.components.get(relay_id)
         if not isinstance(part, Relay):
             raise ValueError(f"{relay_id} is not a relay")
         if steps < 1:
@@ -223,34 +256,32 @@ class SimulatorCLI:
         part.coil = float(value)
         self.step(steps, verbose=False)
         part.coil = prev
-        print(
-            f"Pulsed {relay_id}.coil={value} for {steps} step(s), restored {prev}"
-        )
+        print(f"Pulsed {relay_id}.coil={value} for {steps} step(s), restored {prev}")
         self.show_lights()
 
     def set_momentary(self, switch_id: str, pressed: bool) -> None:
-        part = self.pc.state.get_part(switch_id)
+        part = self.sim.components.get(switch_id)
         if not isinstance(part, MomentarySwitch):
             raise ValueError(f"{switch_id} is not a momentary switch")
         part.pressed = bool(pressed)
         print(f"Set {switch_id}.pressed = {part.pressed}")
 
     def set_latch(self, switch_id: str, latched: bool) -> None:
-        part = self.pc.state.get_part(switch_id)
+        part = self.sim.components.get(switch_id)
         if not isinstance(part, LatchingSwitch):
             raise ValueError(f"{switch_id} is not a latching switch")
         part.latched = bool(latched)
         print(f"Set {switch_id}.latched = {part.latched}")
 
     def toggle_latch(self, switch_id: str) -> None:
-        part = self.pc.state.get_part(switch_id)
+        part = self.sim.components.get(switch_id)
         if not isinstance(part, LatchingSwitch):
             raise ValueError(f"{switch_id} is not a latching switch")
         part.toggle()
         print(f"Toggled {switch_id}.latched -> {part.latched}")
 
     def queue_bits(self, loader_id: str, bits: str) -> None:
-        part = self.pc.state.get_part(loader_id)
+        part = self.sim.components.get(loader_id)
         if not isinstance(part, Bitloader):
             raise ValueError(f"{loader_id} is not a bitloader")
         clean = part._sanitize_bits(bits)
@@ -260,14 +291,14 @@ class SimulatorCLI:
         print(f"Queued {len(clean)} bits into {loader_id}: {clean}")
 
     def set_bitloader_speed(self, loader_id: str, speed: int) -> None:
-        part = self.pc.state.get_part(loader_id)
+        part = self.sim.components.get(loader_id)
         if not isinstance(part, Bitloader):
             raise ValueError(f"{loader_id} is not a bitloader")
         part.speed = max(1, int(speed))
         print(f"Set {loader_id}.speed = {part.speed}")
 
     def clear_bitloader(self, loader_id: str) -> None:
-        part = self.pc.state.get_part(loader_id)
+        part = self.sim.components.get(loader_id)
         if not isinstance(part, Bitloader):
             raise ValueError(f"{loader_id} is not a bitloader")
         part.input = ""
@@ -279,13 +310,13 @@ class SimulatorCLI:
     def help(self) -> None:
         print("Commands:")
         print("  help")
-        print("  load <file.pc1>")
-        print("  save [file.pc1]")
+        print("  load <file.sim>")
+        print("  save [file.sim]")
         print("  status")
         print("  lights")
         print(
             "  list [all|bitloader|relay|wire|light|capacitor|diode|"
-            "momentary_switch|latching_switch]"
+            "momentary_switch|latching_switch|ground|drain]"
         )
         print("  show <part_id>")
         print("  step [count]")
@@ -302,606 +333,299 @@ class SimulatorCLI:
         print("  set <part_id> <attr> <value>")
         print("  quit")
 
-    def repl(self) -> None:
-        print("Relay simulator CLI. Type 'help' for commands.")
+    def exec(self, line: str) -> bool:
+        if not line.strip():
+            return True
 
-        while True:
-            try:
-                line = input("pc> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("\nExiting.")
-                return
+        try:
+            tokens = shlex.split(line)
+        except ValueError as e:
+            print(f"Parse error: {e}")
+            return True
 
-            if not line:
-                continue
+        cmd = tokens[0].lower()
 
-            try:
-                parts = shlex.split(line)
-                cmd = parts[0].lower()
-                args = parts[1:]
-
-                if cmd in {"quit", "exit"}:
-                    print("Exiting.")
-                    return
-                if cmd == "help":
-                    self.help()
-                elif cmd == "load":
-                    self.load(args[0])
-                elif cmd == "save":
-                    self.save(args[0] if args else None)
-                elif cmd == "status":
-                    self.status()
-                elif cmd == "lights":
-                    self.show_lights()
-                elif cmd == "list":
-                    self.list_parts(args[0] if args else "all")
-                elif cmd == "show":
-                    self.show_part(args[0])
-                elif cmd == "step":
-                    self.step(int(args[0]) if args else 1)
-                elif cmd == "run":
-                    count = int(args[0])
-                    delay = float(args[1]) if len(args) > 1 else 0.0
-                    self.run(count, delay)
-                elif cmd == "queue":
-                    self.queue_bits(args[0], args[1])
-                elif cmd == "bspeed":
-                    self.set_bitloader_speed(args[0], int(args[1]))
-                elif cmd == "bclear":
-                    self.clear_bitloader(args[0])
-                elif cmd == "coil":
-                    self.set_coil(args[0], float(args[1]))
-                elif cmd == "pulse":
-                    self.pulse(args[0], float(args[1]), int(args[2]))
-                elif cmd == "press":
-                    self.set_momentary(args[0], True)
-                elif cmd == "release":
-                    self.set_momentary(args[0], False)
-                elif cmd == "latch":
-                    self.set_latch(args[0], bool(_to_value(args[1])))
-                elif cmd == "toggle":
-                    self.toggle_latch(args[0])
-                elif cmd == "set":
-                    self.set_attr(args[0], args[1], args[2])
+        try:
+            if cmd == "help":
+                self.help()
+            elif cmd == "quit" or cmd == "exit":
+                return False
+            elif cmd == "load":
+                if len(tokens) < 2:
+                    print("Usage: load <file.sim>")
                 else:
-                    print(f"Unknown command: {cmd}")
-            except IndexError:
-                print("Missing command arguments. Type 'help'.")
-            except Exception as exc:
-                print(f"Error: {exc}")
+                    self.load(tokens[1])
+            elif cmd == "save":
+                if len(tokens) > 1:
+                    self.save(tokens[1])
+                else:
+                    self.save()
+            elif cmd == "status":
+                self.status()
+            elif cmd == "lights":
+                self.show_lights()
+            elif cmd == "list":
+                kind = tokens[1] if len(tokens) > 1 else "all"
+                self.list_parts(kind)
+            elif cmd == "show":
+                if len(tokens) < 2:
+                    print("Usage: show <part_id>")
+                else:
+                    self.show_part(tokens[1])
+            elif cmd == "step":
+                count = int(tokens[1]) if len(tokens) > 1 else 1
+                self.step(count)
+            elif cmd == "run":
+                if len(tokens) < 2:
+                    print("Usage: run <count> [delay_seconds]")
+                else:
+                    count = int(tokens[1])
+                    delay = float(tokens[2]) if len(tokens) > 2 else 0.0
+                    self.run(count, delay)
+            elif cmd == "queue":
+                if len(tokens) < 3:
+                    print("Usage: queue <bitloader_id> <bit-string>")
+                else:
+                    self.queue_bits(tokens[1], tokens[2])
+            elif cmd == "bspeed":
+                if len(tokens) < 3:
+                    print("Usage: bspeed <bitloader_id> <speed>")
+                else:
+                    self.set_bitloader_speed(tokens[1], int(tokens[2]))
+            elif cmd == "bclear":
+                if len(tokens) < 2:
+                    print("Usage: bclear <bitloader_id>")
+                else:
+                    self.clear_bitloader(tokens[1])
+            elif cmd == "coil":
+                if len(tokens) < 3:
+                    print("Usage: coil <relay_id> <voltage>")
+                else:
+                    self.set_coil(tokens[1], float(tokens[2]))
+            elif cmd == "pulse":
+                if len(tokens) < 4:
+                    print("Usage: pulse <relay_id> <voltage> <steps>")
+                else:
+                    self.pulse(tokens[1], float(tokens[2]), int(tokens[3]))
+            elif cmd == "press":
+                if len(tokens) < 2:
+                    print("Usage: press <momentary_switch_id>")
+                else:
+                    self.set_momentary(tokens[1], True)
+            elif cmd == "release":
+                if len(tokens) < 2:
+                    print("Usage: release <momentary_switch_id>")
+                else:
+                    self.set_momentary(tokens[1], False)
+            elif cmd == "latch":
+                if len(tokens) < 3:
+                    print("Usage: latch <latching_switch_id> <on|off>")
+                else:
+                    value = _to_value(tokens[2])
+                    self.set_latch(tokens[1], bool(value))
+            elif cmd == "toggle":
+                if len(tokens) < 2:
+                    print("Usage: toggle <latching_switch_id>")
+                else:
+                    self.toggle_latch(tokens[1])
+            elif cmd == "set":
+                if len(tokens) < 4:
+                    print("Usage: set <part_id> <attr> <value>")
+                else:
+                    self.set_attr(tokens[1], tokens[2], tokens[3])
+            else:
+                print(f"Unknown command: {cmd}. Type 'help' for available commands.")
+        except Exception as e:
+            print(f"Error: {e}")
+
+        return True
 
 
 class SimulatorGUI:
-    def __init__(self, cli: SimulatorCLI, initial_file: str) -> None:
+    def __init__(self, cli: SimulatorCLI, initial_file: str | None = None) -> None:
         self.cli = cli
-        self.running = False
-        self.relay_update_guard = False
-
         self.root = tk.Tk()
-        self.root.title("Relay Computer Simulator")
-        self.root.geometry("980x700")
+        self.root.title("PC Simulator")
+        self.root.geometry("900x620")
 
-        self.file_var = tk.StringVar(value=initial_file)
-        self.tick_var = tk.StringVar(value="Tick: 0")
-        self.run_button_var = tk.StringVar(value="Run")
-        self.interval_var = tk.IntVar(value=150)
-
-        self.light_widgets = {}
-        self.bitloader_input_vars = {}
-        self.bitloader_speed_vars = {}
-        self.bitloader_status_vars = {}
-        self.momentary_state_vars = {}
-        self.latch_vars = {}
-        self.relay_coil_vars = {}
+        self.current_file_var = tk.StringVar(
+            value=str(cli.loaded_file) if cli.loaded_file else "(no file loaded)"
+        )
+        self.step_count_var = tk.StringVar(value="1")
+        self.run_count_var = tk.StringVar(value="10")
+        self.run_delay_var = tk.StringVar(value="0")
+        self.command_var = tk.StringVar()
 
         self._build_layout()
-        self.load_file(initial_file, show_error=False)
+
+        if initial_file:
+            self._run_command(f'load "{initial_file}"')
 
     def _build_layout(self) -> None:
-        top = ttk.Frame(self.root, padding=8)
-        top.pack(fill="x")
+        top = tk.Frame(self.root, padx=10, pady=10)
+        top.pack(fill=tk.X)
 
-        ttk.Label(top, text="Module file:").pack(side="left")
-        ttk.Entry(top, textvariable=self.file_var, width=55).pack(
-            side="left", padx=6, fill="x", expand=True
+        tk.Label(top, text="File:").pack(side=tk.LEFT)
+        tk.Label(top, textvariable=self.current_file_var, anchor="w").pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 10)
         )
-        ttk.Button(top, text="Browse", command=self.browse_file).pack(side="left")
-        ttk.Button(top, text="Load", command=self.load_from_entry).pack(
-            side="left", padx=4
+
+        tk.Button(top, text="Load", command=self._on_load).pack(side=tk.LEFT, padx=2)
+        tk.Button(top, text="Save", command=self._on_save).pack(side=tk.LEFT, padx=2)
+        tk.Button(top, text="Status", command=lambda: self._run_command("status")).pack(
+            side=tk.LEFT, padx=2
         )
-        ttk.Button(top, text="Save", command=self.save_current).pack(side="left")
-
-        controls = ttk.Frame(self.root, padding=8)
-        controls.pack(fill="x")
-
-        ttk.Label(controls, textvariable=self.tick_var).pack(side="left", padx=6)
-        ttk.Button(controls, text="Step 1", command=lambda: self.step_n(1)).pack(
-            side="left", padx=4
+        tk.Button(top, text="Lights", command=lambda: self._run_command("lights")).pack(
+            side=tk.LEFT, padx=2
         )
-        ttk.Button(controls, text="Step 5", command=lambda: self.step_n(5)).pack(
-            side="left", padx=4
+
+        controls = tk.Frame(self.root, padx=10, pady=5)
+        controls.pack(fill=tk.X)
+
+        tk.Label(controls, text="Step Count:").pack(side=tk.LEFT)
+        tk.Entry(controls, textvariable=self.step_count_var, width=6).pack(
+            side=tk.LEFT, padx=(4, 10)
         )
-        ttk.Button(controls, text="Step 20", command=lambda: self.step_n(20)).pack(
-            side="left", padx=4
+        tk.Button(controls, text="Step", command=self._on_step).pack(
+            side=tk.LEFT, padx=2
         )
-        ttk.Button(
-            controls,
-            textvariable=self.run_button_var,
-            command=self.toggle_running,
-        ).pack(side="left", padx=8)
-        ttk.Label(controls, text="Interval ms:").pack(side="left", padx=(20, 4))
-        ttk.Spinbox(
-            controls,
-            from_=20,
-            to=2000,
-            increment=10,
-            textvariable=self.interval_var,
-            width=8,
-        ).pack(side="left")
 
-        main = ttk.Panedwindow(self.root, orient="horizontal")
-        main.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-
-        left = ttk.Frame(main, padding=4)
-        right = ttk.Frame(main, padding=4)
-        main.add(left, weight=1)
-        main.add(right, weight=1)
-
-        self.lights_frame = ttk.LabelFrame(left, text="Lights", padding=8)
-        self.lights_frame.pack(fill="x", pady=4)
-
-        self.bitloaders_frame = ttk.LabelFrame(left, text="Bitloaders", padding=8)
-        self.bitloaders_frame.pack(fill="x", pady=4)
-
-        self.switches_frame = ttk.LabelFrame(left, text="Switches", padding=8)
-        self.switches_frame.pack(fill="x", pady=4)
-
-        self.relays_frame = ttk.LabelFrame(left, text="Relay Coil Controls", padding=8)
-        self.relays_frame.pack(fill="x", pady=4)
-
-        self.status_frame = ttk.LabelFrame(right, text="Status", padding=8)
-        self.status_frame.pack(fill="both", expand=True, pady=4)
-        self.status_text = tk.Text(self.status_frame, wrap="none", height=35)
-        self.status_text.pack(fill="both", expand=True)
-        self.status_text.configure(state="disabled")
-
-    def browse_file(self) -> None:
-        chosen = filedialog.askopenfilename(
-            title="Open .pc1 module",
-            filetypes=[("PC1 module", "*.pc1"), ("All files", "*.*")],
+        tk.Label(controls, text="Run Count:").pack(side=tk.LEFT, padx=(12, 0))
+        tk.Entry(controls, textvariable=self.run_count_var, width=6).pack(
+            side=tk.LEFT, padx=(4, 8)
         )
-        if chosen:
-            self.file_var.set(chosen)
-            self.load_file(chosen)
+        tk.Label(controls, text="Delay(s):").pack(side=tk.LEFT)
+        tk.Entry(controls, textvariable=self.run_delay_var, width=6).pack(
+            side=tk.LEFT, padx=(4, 10)
+        )
+        tk.Button(controls, text="Run", command=self._on_run).pack(side=tk.LEFT, padx=2)
 
-    def load_from_entry(self) -> None:
-        self.load_file(self.file_var.get().strip())
+        command_row = tk.Frame(self.root, padx=10, pady=5)
+        command_row.pack(fill=tk.X)
+        tk.Label(command_row, text="Command:").pack(side=tk.LEFT)
+        cmd_entry = tk.Entry(command_row, textvariable=self.command_var)
+        cmd_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 8))
+        cmd_entry.bind("<Return>", lambda _event: self._on_command())
+        tk.Button(command_row, text="Run Command", command=self._on_command).pack(
+            side=tk.LEFT
+        )
 
-    def load_file(self, filename: str, show_error: bool = True) -> None:
-        try:
-            self.cli.load(filename)
-            self.file_var.set(filename)
-            self._rebuild_dynamic_panels()
-            self.refresh_view()
-        except Exception as exc:
-            if show_error:
-                messagebox.showerror("Load failed", str(exc))
-            else:
-                raise
+        log_frame = tk.Frame(self.root, padx=10, pady=10)
+        log_frame.pack(fill=tk.BOTH, expand=True)
 
-    def save_current(self) -> None:
-        try:
-            self.cli.save(self.file_var.get().strip())
-        except Exception as exc:
-            messagebox.showerror("Save failed", str(exc))
+        self.log_text = tk.Text(log_frame, wrap="word", state=tk.DISABLED)
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll = tk.Scrollbar(log_frame, command=self.log_text.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_text.configure(yscrollcommand=scroll.set)
 
-    def _rebuild_dynamic_panels(self) -> None:
-        self.light_widgets = {}
-        self.bitloader_input_vars = {}
-        self.bitloader_speed_vars = {}
-        self.bitloader_status_vars = {}
-        self.momentary_state_vars = {}
-        self.latch_vars = {}
-        self.relay_coil_vars = {}
+        self._append_log("GUI ready. Use Load to open a .sim file.")
 
-        for frame in (
-            self.lights_frame,
-            self.bitloaders_frame,
-            self.switches_frame,
-            self.relays_frame,
-        ):
-            for child in frame.winfo_children():
-                child.destroy()
+    def _append_log(self, text: str) -> None:
+        self.log_text.configure(state=tk.NORMAL)
+        self.log_text.insert(tk.END, text.rstrip() + "\n")
+        self.log_text.see(tk.END)
+        self.log_text.configure(state=tk.DISABLED)
 
-        if not self.cli.pc.state.lights:
-            ttk.Label(self.lights_frame, text="No lights in module").pack(anchor="w")
-        for light in self.cli.pc.state.lights:
-            row = ttk.Frame(self.lights_frame)
-            row.pack(fill="x", pady=2)
-            canvas = tk.Canvas(row, width=22, height=22, highlightthickness=0)
-            canvas.pack(side="left")
-            oval = canvas.create_oval(3, 3, 19, 19, fill="#2e2e2e", outline="#666")
-            label_var = tk.StringVar(value=f"{light.part_id} 0.00V")
-            ttk.Label(row, textvariable=label_var).pack(side="left", padx=8)
-            self.light_widgets[light.part_id] = (canvas, oval, label_var)
+    def _run_command(self, command: str) -> None:
+        self._append_log(f"> {command}")
 
-        if not self.cli.pc.state.bitloaders:
-            ttk.Label(self.bitloaders_frame, text="No bitloaders in module").pack(
-                anchor="w"
-            )
-        for loader in self.cli.pc.state.bitloaders:
-            row = ttk.Frame(self.bitloaders_frame)
-            row.pack(fill="x", pady=2)
+        capture = io.StringIO()
+        with contextlib.redirect_stdout(capture):
+            keep_running = self.cli.exec(command)
 
-            ttk.Label(row, text=loader.part_id, width=16).pack(side="left")
+        output = capture.getvalue().rstrip()
+        if output:
+            self._append_log(output)
 
-            input_var = tk.StringVar(value="")
-            self.bitloader_input_vars[loader.part_id] = input_var
-            ttk.Entry(row, textvariable=input_var, width=16).pack(side="left", padx=4)
-            ttk.Button(
-                row,
-                text="Queue",
-                command=lambda lid=loader.part_id: self.queue_gui_bits(lid),
-            ).pack(side="left", padx=2)
-            ttk.Button(
-                row,
-                text="Clear",
-                command=lambda lid=loader.part_id: self.clear_gui_bits(lid),
-            ).pack(side="left", padx=2)
+        self.current_file_var.set(
+            str(self.cli.loaded_file) if self.cli.loaded_file else "(no file loaded)"
+        )
 
-            ttk.Label(row, text="speed").pack(side="left", padx=(8, 2))
-            speed_var = tk.IntVar(value=max(1, int(loader.speed)))
-            self.bitloader_speed_vars[loader.part_id] = speed_var
-            speed_spin = ttk.Spinbox(
-                row,
-                from_=1,
-                to=200,
-                increment=1,
-                textvariable=speed_var,
-                width=5,
-                command=lambda lid=loader.part_id: self.set_gui_loader_speed(lid),
-            )
-            speed_spin.pack(side="left", padx=2)
-            speed_spin.bind(
-                "<Return>",
-                lambda _e, lid=loader.part_id: self.set_gui_loader_speed(lid),
-            )
-            speed_spin.bind(
-                "<FocusOut>",
-                lambda _e, lid=loader.part_id: self.set_gui_loader_speed(lid),
-            )
+        if not keep_running:
+            self.root.destroy()
 
-            status_var = tk.StringVar(value="queue='' out=0.00V")
-            self.bitloader_status_vars[loader.part_id] = status_var
-            ttk.Label(row, textvariable=status_var).pack(side="left", padx=8)
+    def _on_load(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Open simulation",
+            filetypes=[("Simulation files", "*.sim"), ("All files", "*.*")],
+        )
+        if path:
+            self._run_command(f'load "{path}"')
 
-        ttk.Label(self.switches_frame, text="Momentary").pack(anchor="w", pady=(0, 2))
-        if not self.cli.pc.state.momentary_switches:
-            ttk.Label(self.switches_frame, text="  (none)").pack(anchor="w")
-        for switch in self.cli.pc.state.momentary_switches:
-            row = ttk.Frame(self.switches_frame)
-            row.pack(fill="x", pady=2)
-            ttk.Label(row, text=switch.part_id, width=18).pack(side="left")
-            button = ttk.Button(row, text="Hold")
-            button.pack(side="left", padx=4)
-            button.bind(
-                "<ButtonPress-1>",
-                lambda _e, sid=switch.part_id: self.set_momentary_state(sid, True),
-            )
-            button.bind(
-                "<ButtonRelease-1>",
-                lambda _e, sid=switch.part_id: self.set_momentary_state(sid, False),
-            )
-            button.bind(
-                "<Leave>",
-                lambda _e, sid=switch.part_id: self.set_momentary_state(sid, False),
-            )
-            ttk.Button(
-                row,
-                text="Tap",
-                command=lambda sid=switch.part_id: self.tap_momentary(sid),
-            ).pack(side="left", padx=4)
-            state_var = tk.StringVar(value="released")
-            ttk.Label(row, textvariable=state_var).pack(side="left", padx=8)
-            self.momentary_state_vars[switch.part_id] = state_var
+    def _on_save(self) -> None:
+        default_name = "demo.sim"
+        if self.cli.loaded_file is not None:
+            default_name = self.cli.loaded_file.name
 
-        ttk.Separator(self.switches_frame, orient="horizontal").pack(fill="x", pady=6)
-        ttk.Label(self.switches_frame, text="Latching").pack(anchor="w", pady=(0, 2))
-        if not self.cli.pc.state.latching_switches:
-            ttk.Label(self.switches_frame, text="  (none)").pack(anchor="w")
-        for switch in self.cli.pc.state.latching_switches:
-            row = ttk.Frame(self.switches_frame)
-            row.pack(fill="x", pady=2)
-            var = tk.BooleanVar(value=switch.latched)
-            chk = ttk.Checkbutton(
-                row,
-                text=switch.part_id,
-                variable=var,
-                command=lambda sid=switch.part_id, v=var: self.set_latch_state(sid, v),
-            )
-            chk.pack(side="left")
-            self.latch_vars[switch.part_id] = var
+        path = filedialog.asksaveasfilename(
+            title="Save simulation",
+            defaultextension=".sim",
+            initialfile=default_name,
+            filetypes=[("Simulation files", "*.sim"), ("All files", "*.*")],
+        )
+        if path:
+            self._run_command(f'save "{path}"')
 
-        if not self.cli.pc.state.relays:
-            ttk.Label(self.relays_frame, text="No relays in module").pack(anchor="w")
-        for relay in self.cli.pc.state.relays:
-            row = ttk.Frame(self.relays_frame)
-            row.pack(fill="x", pady=2)
-            ttk.Label(row, text=relay.part_id, width=18).pack(side="left")
-            coil_var = tk.DoubleVar(value=relay.coil)
-            self.relay_coil_vars[relay.part_id] = coil_var
-            scale = ttk.Scale(
-                row,
-                from_=0.0,
-                to=5.0,
-                variable=coil_var,
-                command=lambda value, rid=relay.part_id: self.set_relay_coil(rid, value),
-            )
-            scale.pack(side="left", fill="x", expand=True, padx=4)
-            value_var = tk.StringVar(value=f"{relay.coil:.2f}V")
-            ttk.Label(row, textvariable=value_var, width=9).pack(side="left")
-            self.relay_coil_vars[f"{relay.part_id}:label"] = value_var
+    def _on_step(self) -> None:
+        value = self.step_count_var.get().strip() or "1"
+        self._run_command(f"step {value}")
 
-    def set_relay_coil(self, relay_id: str, value) -> None:
-        if self.relay_update_guard:
+    def _on_run(self) -> None:
+        count = self.run_count_var.get().strip() or "1"
+        delay = self.run_delay_var.get().strip() or "0"
+        self._run_command(f"run {count} {delay}")
+
+    def _on_command(self) -> None:
+        command = self.command_var.get().strip()
+        if not command:
             return
-        relay = self.cli.pc.state.get_part(relay_id)
-        if isinstance(relay, Relay):
-            relay.coil = float(value)
-            label_var = self.relay_coil_vars.get(f"{relay_id}:label")
-            if isinstance(label_var, tk.StringVar):
-                label_var.set(f"{relay.coil:.2f}V")
+        self.command_var.set("")
+        self._run_command(command)
 
-    def set_momentary_state(self, switch_id: str, pressed: bool) -> None:
-        switch = self.cli.pc.state.get_part(switch_id)
-        if isinstance(switch, MomentarySwitch):
-            switch.pressed = bool(pressed)
-            self.refresh_view()
-
-    def tap_momentary(self, switch_id: str) -> None:
-        switch = self.cli.pc.state.get_part(switch_id)
-        if not isinstance(switch, MomentarySwitch):
-            return
-        switch.pressed = True
-        self.cli.step(1, verbose=False)
-        switch.pressed = False
-        self.refresh_view()
-
-    def set_latch_state(self, switch_id: str, var: tk.BooleanVar) -> None:
-        switch = self.cli.pc.state.get_part(switch_id)
-        if isinstance(switch, LatchingSwitch):
-            switch.latched = bool(var.get())
-            self.refresh_view()
-
-    def queue_gui_bits(self, loader_id: str) -> None:
-        part = self.cli.pc.state.get_part(loader_id)
-        input_var = self.bitloader_input_vars.get(loader_id)
-        if not isinstance(part, Bitloader) or input_var is None:
-            return
-
-        bits = input_var.get().strip()
-        clean = part._sanitize_bits(bits)
-        if clean:
-            part.enqueue(clean)
-        input_var.set("")
-        self.refresh_view()
-
-    def clear_gui_bits(self, loader_id: str) -> None:
-        part = self.cli.pc.state.get_part(loader_id)
-        if not isinstance(part, Bitloader):
-            return
-        part.input = ""
-        part._buffer = ""
-        part._step = 0
-        part.out_v = 0.0
-        self.refresh_view()
-
-    def set_gui_loader_speed(self, loader_id: str) -> None:
-        part = self.cli.pc.state.get_part(loader_id)
-        speed_var = self.bitloader_speed_vars.get(loader_id)
-        if not isinstance(part, Bitloader) or speed_var is None:
-            return
-        part.speed = max(1, int(speed_var.get()))
-        speed_var.set(part.speed)
-        self.refresh_view()
-
-    def step_n(self, count: int) -> None:
-        self.cli.step(count, verbose=False)
-        self.refresh_view()
-
-    def toggle_running(self) -> None:
-        self.running = not self.running
-        self.run_button_var.set("Pause" if self.running else "Run")
-        if self.running:
-            self._run_loop()
-
-    def _run_loop(self) -> None:
-        if not self.running:
-            return
-        self.cli.step(1, verbose=False)
-        self.refresh_view()
-        interval = max(20, int(self.interval_var.get()))
-        self.root.after(interval, self._run_loop)
-
-    def refresh_view(self) -> None:
-        self.tick_var.set(f"Tick: {self.cli.tick}")
-
-        for light in self.cli.pc.state.lights:
-            data = self.light_widgets.get(light.part_id)
-            if not data:
-                continue
-            canvas, oval, label_var = data
-            color = "#1fd655" if light.on else "#2e2e2e"
-            outline = "#88ff9b" if light.on else "#666666"
-            canvas.itemconfigure(oval, fill=color, outline=outline)
-            label_var.set(f"{light.part_id} {light.v:.2f}V")
-
-        for loader in self.cli.pc.state.bitloaders:
-            status_var = self.bitloader_status_vars.get(loader.part_id)
-            if status_var is not None:
-                status_var.set(
-                    f"queue='{loader._buffer}' phase={loader._step} "
-                    f"out={loader.out_v:.2f}V"
-                )
-            speed_var = self.bitloader_speed_vars.get(loader.part_id)
-            if speed_var is not None:
-                speed_var.set(max(1, int(loader.speed)))
-
-        for switch in self.cli.pc.state.momentary_switches:
-            state_var = self.momentary_state_vars.get(switch.part_id)
-            if state_var is not None:
-                state_var.set("pressed" if switch.pressed else "released")
-
-        for switch in self.cli.pc.state.latching_switches:
-            var = self.latch_vars.get(switch.part_id)
-            if var is not None:
-                var.set(bool(switch.latched))
-
-        self.relay_update_guard = True
-        try:
-            for relay in self.cli.pc.state.relays:
-                var = self.relay_coil_vars.get(relay.part_id)
-                if isinstance(var, tk.DoubleVar):
-                    var.set(relay.coil)
-                label_var = self.relay_coil_vars.get(f"{relay.part_id}:label")
-                if isinstance(label_var, tk.StringVar):
-                    label_var.set(f"{relay.coil:.2f}V")
-        finally:
-            self.relay_update_guard = False
-
-        self._update_status_text()
-
-    def _update_status_text(self) -> None:
-        lines = [f"Tick: {self.cli.tick}", ""]
-
-        lines.append("Bitloaders:")
-        if self.cli.pc.state.bitloaders:
-            for loader in self.cli.pc.state.bitloaders:
-                lines.append(
-                    f"  {loader.part_id}: speed={loader.speed} phase={loader._step} "
-                    f"queue='{loader._buffer}' out={loader.out_v:.2f}V"
-                )
-        else:
-            lines.append("  (none)")
-
-        lines.append("")
-        lines.append("Momentary switches:")
-        if self.cli.pc.state.momentary_switches:
-            for switch in self.cli.pc.state.momentary_switches:
-                lines.append(
-                    f"  {switch.part_id}: pressed={switch.pressed} "
-                    f"out={switch.out_v:.2f}V"
-                )
-        else:
-            lines.append("  (none)")
-
-        lines.append("")
-        lines.append("Latching switches:")
-        if self.cli.pc.state.latching_switches:
-            for switch in self.cli.pc.state.latching_switches:
-                lines.append(
-                    f"  {switch.part_id}: latched={switch.latched} "
-                    f"out={switch.out_v:.2f}V"
-                )
-        else:
-            lines.append("  (none)")
-
-        lines.append("")
-        lines.append("Relays:")
-        for relay in self.cli.pc.state.relays:
-            lines.append(
-                f"  {relay.part_id}: coil={relay.coil:.2f}V "
-                f"NO={relay.norm_open:.2f}V NC={relay.norm_closed:.2f}V"
-            )
-
-        lines.append("")
-        lines.append("Capacitors:")
-        for cap in self.cli.pc.state.capacitors:
-            lines.append(
-                f"  {cap.part_id}: in={cap.in_v:.2f}V v={cap.v:.2f}V "
-                f"charge={cap.charge_rate:.2f} discharge={cap.discharge_rate:.2f}"
-            )
-
-        lines.append("")
-        lines.append("Diodes:")
-        for diode in self.cli.pc.state.diodes:
-            lines.append(
-                f"  {diode.part_id}: in={diode.v:.2f}V out={diode.out_v:.2f}V"
-            )
-
-        text = "\n".join(lines)
-        self.status_text.configure(state="normal")
-        self.status_text.delete("1.0", "end")
-        self.status_text.insert("1.0", text)
-        self.status_text.configure(state="disabled")
-
-    def start(self) -> None:
+    def run(self) -> None:
         self.root.mainloop()
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Relay computer simulator")
-    parser.add_argument(
-        "file",
-        nargs="?",
-        default="module.pc1",
-        help="Path to a .pc1 module (default: module.pc1)",
-    )
-    parser.add_argument(
-        "--steps",
-        type=int,
-        default=0,
-        help="Run this many steps immediately after loading",
-    )
-    parser.add_argument(
-        "--status",
-        action="store_true",
-        help="Print full status after loading/stepping",
-    )
-    parser.add_argument(
-        "--no-repl",
-        action="store_true",
-        help="Run initial actions and exit without interactive prompt",
-    )
-    parser.add_argument(
-        "--gui",
-        action="store_true",
-        help="Launch Tkinter GUI with visual indicators",
-    )
-    return parser
+def main():
+    parser = argparse.ArgumentParser(description="Simulator CLI")
+    parser.add_argument("file", nargs="?", help="Sim file to load (.sim)")
+    parser.add_argument("-c", "--command", help="Execute a single command and exit")
+    parser.add_argument("--gui", action="store_true", help="Launch Tkinter GUI")
 
+    args = parser.parse_args()
 
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    cli = SimulatorCLI()
 
-    try:
-        if args.gui:
-            cli = SimulatorCLI()
-            gui = SimulatorGUI(cli, args.file)
-            if args.steps:
-                gui.step_n(args.steps)
-            gui.start()
-            return 0
+    if args.gui:
+        gui = SimulatorGUI(cli, initial_file=args.file)
+        gui.run()
+        return
 
-        cli = SimulatorCLI()
-        cli.load(args.file)
+    if args.file:
+        try:
+            cli.load(args.file)
+        except Exception as e:
+            print(f"Failed to load {args.file}: {e}")
+            sys.exit(1)
 
-        if args.steps:
-            cli.step(args.steps, verbose=False)
+    if args.command:
+        cli.exec(args.command)
+        return
 
-        if args.status or args.steps:
-            cli.status()
+    print("Simulator CLI. Type 'help' for commands.")
 
-        if not args.no_repl:
-            cli.repl()
-
-        return 0
-    except Exception as exc:
-        print(f"Fatal: {exc}")
-        return 1
+    while True:
+        try:
+            line = input("> ")
+            if not cli.exec(line):
+                break
+        except EOFError:
+            break
+        except KeyboardInterrupt:
+            print("\nInterrupted. Type 'quit' to exit.")
+            continue
 
 
 if __name__ == "__main__":
-    sys.exit(main())
-
+    main()

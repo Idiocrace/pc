@@ -1,175 +1,11 @@
 class State:
     def __init__(self) -> None:
-        self.bitloaders = []
-        self.relays = []
-        self.wires = []
-        self.lights = []
-        self.capacitors = []
-        self.diodes = []
-        self.momentary_switches = []
-        self.latching_switches = []
-        self.parts_by_id = {}
-        self._id_counters = {
-            "bitloader": 0,
-            "relay": 0,
-            "wire": 0,
-            "light": 0,
-            "capacitor": 0,
-            "diode": 0,
-            "momentary-switch": 0,
-            "latching-switch": 0,
-        }
-
-    def _part_prefix(self, component) -> str:
-        if isinstance(component, Bitloader):
-            return "bitloader"
-        if isinstance(component, Relay):
-            return "relay"
-        if isinstance(component, Wire):
-            return "wire"
-        if isinstance(component, Light):
-            return "light"
-        if isinstance(component, Capacitor):
-            return "capacitor"
-        if isinstance(component, Diode):
-            return "diode"
-        if isinstance(component, MomentarySwitch):
-            return "momentary-switch"
-        if isinstance(component, LatchingSwitch):
-            return "latching-switch"
-
-        raise TypeError(
-            f"Unsupported component type: {type(component).__name__}"
-        )
-
-    def _assign_part_id(self, component) -> str:
-        existing = getattr(component, "part_id", None)
-        if existing:
-            owner = self.parts_by_id.get(existing)
-            if owner is not None and owner is not component:
-                raise ValueError(f"Duplicate part_id detected: {existing}")
-
-            prefix, sep, num_str = str(existing).rpartition("-")
-            if sep and prefix in self._id_counters and num_str.isdigit():
-                self._id_counters[prefix] = max(
-                    self._id_counters[prefix], int(num_str)
-                )
-
-            self.parts_by_id[existing] = component
-            return existing
-
-        prefix = self._part_prefix(component)
-        self._id_counters[prefix] += 1
-        part_id = f"{prefix}-{self._id_counters[prefix]}"
-        component.part_id = part_id
-        self.parts_by_id[part_id] = component
-        return part_id
-
-    def get_part(self, part_id: str):
-        return self.parts_by_id.get(part_id)
-
-    def add(self, component):
-        self._assign_part_id(component)
-
-        if isinstance(
-            component, Bitloader
-        ) and component not in self.bitloaders:
-            self.bitloaders.append(component)
-        elif isinstance(component, Relay) and component not in self.relays:
-            self.relays.append(component)
-        elif isinstance(component, Light) and component not in self.lights:
-            self.lights.append(component)
-        elif (
-            isinstance(component, Capacitor)
-            and component not in self.capacitors
-        ):
-            self.capacitors.append(component)
-        elif isinstance(component, Diode) and component not in self.diodes:
-            self.diodes.append(component)
-        elif (
-            isinstance(component, MomentarySwitch)
-            and component not in self.momentary_switches
-        ):
-            self.momentary_switches.append(component)
-        elif (
-            isinstance(component, LatchingSwitch)
-            and component not in self.latching_switches
-        ):
-            self.latching_switches.append(component)
-        elif isinstance(component, Wire) and component not in self.wires:
-            self.wires.append(component)
-        elif not isinstance(
-            component,
-            (
-                Relay,
-                Bitloader,
-                Light,
-                Capacitor,
-                Diode,
-                MomentarySwitch,
-                LatchingSwitch,
-                Wire,
-            ),
-        ):
-            raise TypeError(
-                f"Unsupported component type: {type(component).__name__}"
-            )
-
-        return component
-
-    def connect(
-        self,
-        source,
-        source_attr: str,
-        target,
-        target_attr: str,
-        drop: float = 0.0,
-    ):
-        wire = Wire(
-            source=source,
-            source_attr=source_attr,
-            target=target,
-            target_attr=target_attr,
-            drop=drop,
-        )
-        return self.add(wire)
-
-    def process(self):
-        # Run in stages so newly computed outputs can be propagated.
-        for bitloader in self.bitloaders:
-            bitloader.process()
-
-        for switch in self.momentary_switches:
-            switch.process()
-
-        for switch in self.latching_switches:
-            switch.process()
-
-        for relay in self.relays:
-            relay.process()
-
-        for wire in self.wires:
-            wire.process()
-
-        for diode in self.diodes:
-            diode.process()
-
-        for wire in self.wires:
-            wire.process()
-
-        for capacitor in self.capacitors:
-            capacitor.process()
-
-        for wire in self.wires:
-            wire.process()
-
-        for light in self.lights:
-            light.process()
+        raise DeprecationWarning("State is deprecated. Please use Sim instead")
 
 
-def _gen_serialization(name, **attrs) -> str:
+def _gen_serialization(_, **attrs) -> str:
     attr_str = ", ".join(f"{k}={v}" for k, v in attrs.items())
-    return f"{name}({attr_str});"
+    return f"{_}({attr_str});"
 
 
 def _parse_bool(value, default: bool = False) -> bool:
@@ -178,6 +14,26 @@ def _parse_bool(value, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "on", "yes"}
 
 
+components = {}
+
+
+# Component decorator
+def Component(serial_name=None):
+    def decorator(cls):
+        name = serial_name if serial_name else cls.__name__.lower()
+        components[name] = cls
+        return cls
+
+    # If called without arguments as a bare decorator: @Component
+    if callable(serial_name):
+        cls = serial_name
+        components[cls.__name__.lower()] = cls
+        return cls
+
+    return decorator
+
+
+@Component("bitloader")
 class Bitloader:
     def __init__(self) -> None:
         self.part_id = None
@@ -217,13 +73,14 @@ class Bitloader:
             id=self.part_id,
             speed=self.speed,
             input=self.input,
-            buffer=self._buffer,
-            phase=self._step,
+            _buffer=self._buffer,
+            _step=self._step,
             vcc=self.vcc,
-            out_voltage=self.out_v
+            out_v=self.out_v,
         )
 
 
+@Component("relay")
 class Relay:
     def __init__(self) -> None:
         self.part_id = None
@@ -249,10 +106,11 @@ class Relay:
             vcc=self.vcc,
             norm_open=self.norm_open,
             norm_closed=self.norm_closed,
-            coil_threshold=self.coil_threshold
+            coil_threshold=self.coil_threshold,
         )
 
 
+@Component("momentary_switch")
 class MomentarySwitch:
     def __init__(self) -> None:
         self.part_id = None
@@ -280,12 +138,13 @@ class MomentarySwitch:
             id=self.part_id,
             vcc=self.vcc,
             pressed=self.pressed,
-            out_voltage=self.out_v,
+            out_v=self.out_v,
             norm_open=self.norm_open,
-            norm_closed=self.norm_closed
+            norm_closed=self.norm_closed,
         )
 
 
+@Component("latching_switch")
 class LatchingSwitch:
     def __init__(self) -> None:
         self.part_id = None
@@ -310,12 +169,13 @@ class LatchingSwitch:
             id=self.part_id,
             vcc=self.vcc,
             latched=self.latched,
-            out_voltage=self.out_v,
+            out_v=self.out_v,
             norm_open=self.norm_open,
-            norm_closed=self.norm_closed
+            norm_closed=self.norm_closed,
         )
 
 
+# Technically not a component
 class Wire:
     def __init__(
         self,
@@ -325,8 +185,9 @@ class Wire:
         target_attr: str = "v",
         drop: float = 0.0,
     ) -> None:
-        self.part_id = None
+        self.part_id: str | None = None
         self.v = 0.0
+        self.enabled = True
         self.source = source
         self.source_attr = source_attr
         self.target = target
@@ -334,6 +195,12 @@ class Wire:
         self.drop = drop
 
     def process(self):
+        if not self.enabled:
+            self.v = 0.0
+            if self.target is not None:
+                setattr(self.target, self.target_attr, 0.0)
+            return 0.0
+
         if self.source is not None:
             self.v = float(getattr(self.source, self.source_attr, 0.0))
 
@@ -348,40 +215,46 @@ class Wire:
         return _gen_serialization(
             "wire",
             id=self.part_id,
-            voltage=self.v,
+            v=self.v,
             source_id=self.source.part_id if self.source else None,
             source_attr=self.source_attr,
             target_id=self.target.part_id if self.target else None,
             target_attr=self.target_attr,
-            drop=self.drop
+            drop=self.drop,
         )
 
 
+@Component("light")
 class Light:
     def __init__(self) -> None:
         self.part_id = None
-        self.v = 0.0
+        self.is_consumer = True
+        self.vcc = 0.0
+        self.gnd = 0.0
         self.on_threshold = 1.8
         self.on = False
 
     def process(self):
-        self.on = self.v >= self.on_threshold
+        self.on = self.vcc >= self.on_threshold
         return self.on
 
     def serialize(self) -> str:
         return _gen_serialization(
             "light",
             id=self.part_id,
-            voltage=self.v,
+            vcc=self.vcc,
             on=self.on,
-            threshold=self.on_threshold
+            on_threshold=self.on_threshold,
         )
 
 
+@Component("capacitor")
 class Capacitor:
     def __init__(self) -> None:
         self.part_id = None
-        self.in_v = 0.0
+        self.is_storage = True
+        self.vcc = 0.0
+        self.gnd = 0.0
         self.v = 0.0
         self.max_v = 5.0
         self.charge_rate = 0.1
@@ -389,7 +262,7 @@ class Capacitor:
 
     def process(self):
         # Charge/discharge toward input voltage at limited rates.
-        target_v = max(0.0, min(self.max_v, self.in_v))
+        target_v = max(0.0, min(self.max_v, self.vcc))
 
         if target_v > self.v:
             self.v = min(target_v, self.v + self.charge_rate)
@@ -402,44 +275,52 @@ class Capacitor:
         return _gen_serialization(
             "capacitor",
             id=self.part_id,
-            voltage=self.v,
-            in_voltage=self.in_v,
-            max_voltage=self.max_v,
+            v=self.v,
+            vcc=self.vcc,
+            max_v=self.max_v,
             charge_rate=self.charge_rate,
-            discharge_rate=self.discharge_rate
+            discharge_rate=self.discharge_rate,
         )
 
 
+@Component("diode")
 class Diode:
     def __init__(self) -> None:
         self.part_id = None
-        self.v = 0.0
+        self.vcc = 0.0
         self.out_v = 0.0
+        self.drain_rate = 1.0
         self.forward_threshold = 0.7
+        self.backward_threshold = 5
 
     def process(self):
-        if self.v >= self.forward_threshold:
-            self.out_v = self.v - self.forward_threshold
-        else:
-            self.out_v = 0.0
-
+        if self.vcc >= self.forward_threshold:
+            self.out_v = self.vcc - self.forward_threshold
+        elif self.out_v >= self.backward_threshold:
+            self.vcc = self.out_v
+            self.out_v -= self.drain_rate * self.out_v
+            if self.out_v < 0.01:
+                self.out_v = 0
         return self.out_v
 
     def serialize(self) -> str:
         return _gen_serialization(
             "diode",
             id=self.part_id,
-            voltage=self.v,
-            out_voltage=self.out_v,
-            forward_threshold=self.forward_threshold
+            vcc=self.vcc,
+            out_v=self.out_v,
+            forward_threshold=self.forward_threshold,
+            backward_threshold=self.backward_threshold,
+            drain_rate=self.drain_rate,
         )
 
 
+@Component("oscillator")
 class Oscillator:
     def __init__(self) -> None:
         self.part_id = None
-        self.vcc = 5.0
-        self.frequency = 1.0
+        self.vcc = 0.0
+        self.frequency = 1.0  # Every f steps, swap state
         self.out_v = 0.0
 
     def process(self):
@@ -454,225 +335,337 @@ class Oscillator:
             id=self.part_id,
             vcc=self.vcc,
             frequency=self.frequency,
-            out_voltage=self.out_v
+            out_v=self.out_v,
         )
 
 
-class PowerSource:
+@Component("supply")
+class Supply:
     def __init__(self) -> None:
         self.part_id = None
         self.generation = 5.0
-        self.out_v = 5.0
+        self.over_protection_rate = 0.1
+        self.v_out = 0.0
 
     def process(self):
-        self.out_v = self.generation
-        return self.out_v
+        if self.v_out <= self.generation:
+            self.v_out += self.generation
+        elif self.v_out > self.generation:
+            # OVERLOAD!!!
+            self.v_out -= self.over_protection_rate
+            if self.v_out < 0:
+                self.v_out = 0
+        return self.v_out
 
     def serialize(self) -> str:
         return _gen_serialization(
-            "power_source",
+            "supply",
             id=self.part_id,
-            vcc=self.generation,
-            out_voltage=self.out_v
+            generation=self.generation,
+            over_protection_rate=self.over_protection_rate,
+            v_out=self.v_out,
         )
 
 
-if __name__ == "__main__":
-    # Example: relay -> diode -> capacitor -> light
-    state = State()
+@Component("drain")
+class Drain:
+    def __init__(self) -> None:
+        self.part_id = None
+        self.is_sink = True
+        self.is_consumer = True
+        self.drain = 5.0
+        self.vcc = 0.0
 
-    relay = Relay()
-    relay.vcc = 5.0
-    relay.coil = 3.3
+    def process(self):
+        self.vcc = max(0.0, self.vcc - self.drain)
+        return self.vcc
 
-    diode = Diode()
-
-    capacitor = Capacitor()
-    capacitor.charge_rate = 1.0
-    capacitor.discharge_rate = 0.5
-
-    light = Light()
-    light.on_threshold = 2.0
-
-    state.add(relay)
-    state.add(diode)
-    state.add(capacitor)
-    state.add(light)
-
-    state.connect(relay, "norm_open", diode, "v")
-    state.connect(diode, "out_v", capacitor, "in_v")
-    state.connect(capacitor, "v", light, "v")
-
-    print(
-        "Parts:",
-        relay.part_id,
-        diode.part_id,
-        capacitor.part_id,
-        light.part_id,
-    )
-
-    print("Charging...")
-    for step in range(1, 6):
-        state.process()
-        print(
-            f"t{step}: diode_out={diode.out_v:.2f}V "
-            f"cap={capacitor.v:.2f}V light_on={light.on}"
+    def serialize(self) -> str:
+        return _gen_serialization(
+            "drain", id=self.part_id, drain=self.drain, vcc=self.vcc
         )
 
-    relay.coil = 0.0
-    print("Discharging...")
-    for step in range(6, 11):
-        state.process()
-        print(
-            f"t{step}: diode_out={diode.out_v:.2f}V "
-            f"cap={capacitor.v:.2f}V light_on={light.on}"
-        )
+
+@Component("ground")
+class Ground:
+    def __init__(self) -> None:
+        self.part_id = None
+        self.is_sink = True
+        self.vcc = 0.0
+
+    def process(self):
+        self.vcc = 0.0
+        return self.vcc
+
+    def serialize(self) -> str:
+        return _gen_serialization("ground", id=self.part_id, vcc=self.vcc)
 
 
 class PC1:
-    def __init__(self) -> None:
-        self.state = State()
-        self.file_content = ""
-        self.dict_rep = []
+    """DEPRECATED: This class is deprecated. Use Sim instead"""
 
-    def load(self, filename: str):
-        with open(filename, "r") as f:
-            self.file_content = f.read()
+    def __init__(self):
+        raise DeprecationWarning("PC1 is deprecated. Please use Sim instead")
 
-        self.state = State()
-        self._parse_todict()
 
-        # Convert dictionary into a State
-        # Components: relay, wire, light, capacitor, diode, switches, bitloader
-        for name, attrs in self.dict_rep:
-            if name == "bitloader":
-                loader = Bitloader()
-                loader.part_id = attrs.get("id")
-                loader.speed = max(1, int(float(attrs.get("speed", 1))))
-                loader.input = loader._sanitize_bits(attrs.get("input", ""))
-                loader._buffer = loader._sanitize_bits(attrs.get("buffer", ""))
-                loader._step = max(0, int(float(attrs.get("phase", 0))))
-                loader.vcc = float(attrs.get("vcc", 5.0))
-                loader.out_v = float(attrs.get("out_voltage", 0.0))
-                self.state.add(loader)
-            elif name == "relay":
-                relay = Relay()
-                relay.part_id = attrs.get("id")
-                relay.coil = float(attrs.get("coil", 0.0))
-                relay.vcc = float(attrs.get("vcc", 0.0))
-                relay.norm_open = float(attrs.get("norm_open", 0.0))
-                relay.norm_closed = float(attrs.get("norm_closed", 0.0))
-                relay.coil_threshold = float(attrs.get("coil_threshold", 2.0))
-                self.state.add(relay)
-            elif name == "light":
-                light = Light()
-                light.part_id = attrs.get("id")
-                light.v = float(attrs.get("voltage", 0.0))
-                light.on_threshold = float(attrs.get("threshold", 1.8))
-                light.on = _parse_bool(attrs.get("on"), False)
-                self.state.add(light)
-            elif name == "capacitor":
-                cap = Capacitor()
-                cap.part_id = attrs.get("id")
-                cap.v = float(attrs.get("voltage", 0.0))
-                cap.in_v = float(attrs.get("in_voltage", 0.0))
-                cap.max_v = float(attrs.get("max_voltage", 5.0))
-                cap.charge_rate = float(attrs.get("charge_rate", 0.1))
-                cap.discharge_rate = float(attrs.get("discharge_rate", 0.1))
-                self.state.add(cap)
-            elif name == "diode":
-                diode = Diode()
-                diode.part_id = attrs.get("id")
-                diode.v = float(attrs.get("voltage", 0.0))
-                diode.out_v = float(attrs.get("out_voltage", 0.0))
-                diode.forward_threshold = float(
-                    attrs.get("forward_threshold", 0.7)
-                )
-                self.state.add(diode)
-            elif name == "momentary_switch":
-                switch = MomentarySwitch()
-                switch.part_id = attrs.get("id")
-                switch.vcc = float(attrs.get("vcc", 5.0))
-                switch.pressed = _parse_bool(attrs.get("pressed"), False)
-                switch.out_v = float(attrs.get("out_voltage", 0.0))
-                switch.norm_open = float(attrs.get("norm_open", 0.0))
-                switch.norm_closed = float(
-                    attrs.get("norm_closed", switch.vcc)
-                )
-                self.state.add(switch)
-            elif name == "latching_switch":
-                switch = LatchingSwitch()
-                switch.part_id = attrs.get("id")
-                switch.vcc = float(attrs.get("vcc", 5.0))
-                switch.latched = _parse_bool(attrs.get("latched"), False)
-                switch.out_v = float(attrs.get("out_voltage", 0.0))
-                switch.norm_open = float(attrs.get("norm_open", 0.0))
-                switch.norm_closed = float(
-                    attrs.get("norm_closed", switch.vcc)
-                )
-                self.state.add(switch)
+class Sim:
+    def __init__(self, version):
+        self.name = ""
+        self.version = version
+        self.components = {}
+        self.curr_step = 0
 
-        # Create wires after all endpoint parts exist.
-        for name, attrs in self.dict_rep:
-            if name == "wire":
-                source = None
-                target = None
+    def _assign_part_id(self, part_id: str | None, component_name: str) -> str:
+        if part_id:
+            return part_id
+        idx = 1
+        while f"{component_name}-{idx}" in self.components:
+            idx += 1
+        return f"{component_name}-{idx}"
 
-                source_id = attrs.get("source_id")
-                target_id = attrs.get("target_id")
-                if source_id:
-                    source = self.state.get_part(source_id)
-                if target_id:
-                    target = self.state.get_part(target_id)
+    def add_component(self, component_name: str, **attrs):
+        if component_name not in components:
+            raise TypeError(f"Unknown component type: {component_name}")
 
-                wire = Wire(
-                    source=source,
-                    source_attr=attrs.get("source_attr", "v"),
-                    target=target,
-                    target_attr=attrs.get("target_attr", "v"),
-                    drop=float(attrs.get("drop", 0.0)),
-                )
-                wire.part_id = attrs.get("id")
-                wire.v = float(attrs.get("voltage", 0.0))
-                self.state.add(wire)
-
-    def _parse_todict(self):
-        self.dict_rep = []
-        clean = self.file_content.strip()
-        statements = clean.split(";")
-        for stm in statements:
-            if not stm.strip():
+        comp = components[component_name]()
+        for k, v in attrs.items():
+            if k == "id":
                 continue
-            name, args_str = stm.split("(", 1)
-            args_str = args_str.rsplit(")", 1)[0]
-            args = {}
-            for arg in args_str.split(","):
-                if not arg.strip():
+            if not hasattr(comp, k):
+                raise AttributeError(
+                    f"Component '{component_name}' has no attribute '{k}'."
+                )
+            current = getattr(comp, k)
+            if isinstance(current, bool):
+                setattr(comp, k, _parse_bool(v))
+            else:
+                setattr(comp, k, type(current)(v))
+
+        comp.part_id = self._assign_part_id(attrs.get("id"), component_name)
+        self.components[comp.part_id] = comp
+        return comp
+
+    def connect(
+        self,
+        source_id: str,
+        source_attr: str,
+        target_id: str,
+        target_attr: str,
+        drop: float = 0.0,
+        wire_id: str | None = None,
+    ):
+        if source_id not in self.components or target_id not in self.components:
+            raise ValueError("Both source_id and target_id must exist before connect.")
+
+        wire = Wire(
+            source=self.components[source_id],
+            source_attr=source_attr,
+            target=self.components[target_id],
+            target_attr=target_attr,
+            drop=float(drop),
+        )
+        wire.part_id = self._assign_part_id(wire_id, "wire")
+        self.components[wire.part_id] = wire
+        return wire
+
+    def _is_wire(self, comp):
+        return isinstance(comp, Wire)
+
+    def _is_sink(self, comp):
+        return bool(getattr(comp, "is_sink", False))
+
+    def _is_storage_or_consumer(self, comp):
+        return bool(
+            getattr(comp, "is_storage", False) or getattr(comp, "is_consumer", False)
+        )
+
+    def _next_components(self, comp):
+        for maybe_wire in self.components.values():
+            if not self._is_wire(maybe_wire):
+                continue
+            if maybe_wire.source is comp and maybe_wire.target is not None:
+                yield maybe_wire.target
+
+    def _path_has_sink_and_load(self, start_comp):
+        stack = [(start_comp, self._is_storage_or_consumer(start_comp))]
+        visited = set()
+
+        while stack:
+            comp, seen_load = stack.pop()
+            key = (id(comp), seen_load)
+            if key in visited:
+                continue
+            visited.add(key)
+
+            if self._is_sink(comp) and seen_load:
+                return True
+
+            for nxt in self._next_components(comp):
+                stack.append((nxt, seen_load or self._is_storage_or_consumer(nxt)))
+
+        return False
+
+    def _update_wire_flow_permissions(self):
+        has_any_sink = any(
+            self._is_sink(comp)
+            for comp in self.components.values()
+            if not self._is_wire(comp)
+        )
+
+        for comp in self.components.values():
+            if not self._is_wire(comp):
+                continue
+
+            # No drain/ground means no current flow.
+            if not has_any_sink:
+                comp.enabled = False
+                continue
+
+            if comp.source is None or comp.target is None:
+                comp.enabled = False
+                continue
+
+            comp.enabled = self._path_has_sink_and_load(comp.target)
+
+    def load_sim_state(self, path):
+        with open(path, "r") as f:
+            tmp_raw_file_content = f.read()
+            tmp_file_content = tmp_raw_file_content.strip()
+            # Before tokenizing and parsing, check all lines to see if its a comment
+            tmp_file_content = "\n".join(
+                line
+                for line in tmp_file_content.splitlines()
+                if not line.strip().startswith("#")
+            )
+            tmp_tokens = tmp_file_content.split(";")
+            tmp_raw_components = []
+            for token in tmp_tokens:
+                token = token.strip()
+                if not token:
                     continue
-                key, value = arg.split("=", 1)
-                args[key.strip()] = value.strip()
-            self.dict_rep.append((name.strip(), args))
+                tmp_name_args = token.strip(")").split("(", 1)
+                tmp_name = tmp_name_args[0]
+                tmp_raw_args = tmp_name_args[1].split(",")
+                tmp_args = {}
+                for arg in tmp_raw_args:
+                    tmp_kv = arg.split("=", 1)
+                    if len(tmp_kv) == 2:
+                        tmp_k, tmp_v = tmp_kv
+                        tmp_args[tmp_k.strip()] = tmp_v.strip()
+                tmp_raw_components.append((tmp_name, tmp_args))
 
-    def save(self, filename: str):
-        lines = []
-        for loader in self.state.bitloaders:
-            lines.append(loader.serialize())
-        for relay in self.state.relays:
-            lines.append(relay.serialize())
-        for switch in self.state.momentary_switches:
-            lines.append(switch.serialize())
-        for switch in self.state.latching_switches:
-            lines.append(switch.serialize())
-        for light in self.state.lights:
-            lines.append(light.serialize())
-        for cap in self.state.capacitors:
-            lines.append(cap.serialize())
-        for diode in self.state.diodes:
-            lines.append(diode.serialize())
-        for wire in self.state.wires:
-            lines.append(wire.serialize())
+            meta_args = None
+            for comp_name, comp_args in tmp_raw_components:
+                if comp_name == "@meta":
+                    meta_args = comp_args
+                    break
 
-        self.file_content = "\n".join(lines)
+            if meta_args is None:
+                raise SyntaxError("Sim-state files must contain an '@meta' dataset.")
 
-        with open(filename, "w") as f:
-            f.write(self.file_content)
+            tmp_split_version = self.version.split(".")
+            tmp_file_split_version = meta_args["version"].split(".")
+            if tmp_split_version[0] != tmp_file_split_version[0]:
+                raise SyntaxError(
+                    f"Sim-state major version {tmp_file_split_version[0]} does not"
+                    f" match Sim version {tmp_split_version[0]}."
+                )
+            self.name = meta_args["name"]
+
+        self.components = {}
+
+        # Get to component creation
+        for comp_name, comp_args in tmp_raw_components:
+            if comp_name == "@meta" or comp_name == "wire":
+                continue
+
+            if comp_name not in components:
+                raise TypeError(
+                    f"Component type {comp_name} does not exist nor is special."
+                )
+
+            comp_cls = components[comp_name]
+            comp_instance = comp_cls()
+            for arg_k, arg_v in comp_args.items():
+                if arg_k in {"id", "source_id", "target_id"}:
+                    continue
+                if hasattr(comp_instance, arg_k):
+                    attr_type = type(getattr(comp_instance, arg_k))
+                    try:
+                        if attr_type is bool:
+                            setattr(comp_instance, arg_k, _parse_bool(arg_v))
+                        else:
+                            setattr(comp_instance, arg_k, attr_type(arg_v))
+                    except ValueError:
+                        raise ValueError(
+                            f"Invalid argument value for component '{comp_name}'"
+                            f" attribute '{arg_k}': '{arg_v}'"
+                        )
+                else:
+                    raise AttributeError(
+                        f"Component '{comp_name}' has no attribute '{arg_k}'."
+                    )
+
+            comp_instance.part_id = comp_args.get("id")
+            if not comp_instance.part_id:
+                raise ValueError(f"Component '{comp_name}' must define a non-empty id.")
+            self.components[comp_instance.part_id] = comp_instance
+
+        # After component creation, we need to register wire connections
+        # This is done separately because wires technically arent components internally
+        for comp_name, comp_args in tmp_raw_components:
+            if comp_name == "wire":
+                source_id = comp_args["source_id"]
+                target_id = comp_args["target_id"]
+                if source_id not in self.components or target_id not in self.components:
+                    raise ValueError(
+                        f"Invalid wire connection: source id {source_id} or target"
+                        f" id {target_id} does not exist."
+                    )
+                source_comp = self.components[source_id]
+                target_comp = self.components[target_id]
+                wire_instance = Wire(
+                    source=source_comp,
+                    source_attr=comp_args["source_attr"],
+                    target=target_comp,
+                    target_attr=comp_args["target_attr"],
+                    drop=float(comp_args["drop"]),
+                )
+                wire_instance.part_id = comp_args.get("id")
+                if not wire_instance.part_id:
+                    raise ValueError("Wire must define a non-empty id.")
+                self.components[wire_instance.part_id] = wire_instance
+
+    def save_sim_state(self, path):
+        with open(path, "w") as f:
+            f.write(
+                _gen_serialization("@meta", name=self.name, version=self.version) + "\n"
+            )
+            for comp in self.components.values():
+                f.write(comp.serialize() + "\n")
+
+    def step(self):
+        for comp in self.components.values():
+            if not self._is_wire(comp):
+                comp.process()
+
+        self._update_wire_flow_permissions()
+
+        for comp in self.components.values():
+            if self._is_wire(comp):
+                comp.process()
+
+        for comp in self.components.values():
+            if not self._is_wire(comp):
+                comp.process()
+
+        self.curr_step += 1
+
+    def reset(self):
+        self.curr_step = 0
+        original_items = list(self.components.items())
+        self.components = {}
+        for part_id, comp in original_items:
+            comp.__init__()
+            comp.part_id = part_id
+            self.components[part_id] = comp
